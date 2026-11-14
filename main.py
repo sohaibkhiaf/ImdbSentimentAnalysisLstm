@@ -7,10 +7,10 @@ import matplotlib.pyplot as plt
 
 from torch.utils.data import TensorDataset, DataLoader
 import nltk
-from Tools.scripts.make_ctype import values
 from nltk import sentiment
 from nltk.corpus import stopwords
 from collections import Counter
+import pickle
 import re
 from string import punctuation
 
@@ -27,7 +27,9 @@ print(f"Device: {device}")
 print("\n\n")
 
 # loading data ===========================
-df = pd.read_csv("imdb_train_dataset.csv")
+df = pd.read_csv("imdb_dataset.csv")
+# Shuffle once so each split is representative and reproducible.
+df = df.sample(frac=1, random_state=RANDOM_SEED).reset_index(drop=True)
 
 print(f"Data shape: {df.shape}")
 print(f"Number of positive samples: {df[df['sentiment'] == 'positive'].shape[0]}")
@@ -57,7 +59,7 @@ def preprocess_string(s):
     return s
 
 # create vocabulary ==================================
-MAX_VOCAB_SIZE = 120
+MAX_VOCAB_SIZE = 1000
 
 word_list = []
 
@@ -180,19 +182,20 @@ print(f"y encoded:  \n{y_encoded}")
 print("\n\n")
 
 
-# train validation split =========================
-split_frac = 0.8
+# train / validation / test split =========================
+# 50% train, 25% validation, 25% test
+train_idx = int(len(X_pad) * 0.50)
+val_idx = train_idx + int(len(X_pad) * 0.25)
 
-## split data into training and validation data (X and y)
-
-split_idx = int(len(X_pad)*split_frac)
-X_train, X_val = X_pad[:split_idx], X_pad[split_idx:]
-y_train, y_val = y_encoded[:split_idx], y_encoded[split_idx:]
+X_train, X_val, X_test = X_pad[:train_idx], X_pad[train_idx:val_idx], X_pad[val_idx:]
+y_train, y_val, y_test = y_encoded[:train_idx], y_encoded[train_idx:val_idx], y_encoded[val_idx:]
 
 print(f"X train shape: {X_train.shape}")
 print(f"y train shape: {y_train.shape}")
 print(f"X val shape: {X_val.shape}")
 print(f"y val shape: {y_val.shape}")
+print(f"X test shape: {X_test.shape}")
+print(f"y test shape: {y_test.shape}")
 print("\n\n")
 
 
@@ -200,12 +203,14 @@ print("\n\n")
 # create datasets and data loaders =============================
 train_data = TensorDataset(torch.from_numpy(X_train), torch.from_numpy(y_train))
 val_data = TensorDataset(torch.from_numpy(X_val), torch.from_numpy(y_val))
+test_data = TensorDataset(torch.from_numpy(X_test), torch.from_numpy(y_test))
 
 BATCH_SIZE = 50
 
 # make sure the SHUFFLE your training data
 train_dataloader = DataLoader(train_data, shuffle=True, batch_size=BATCH_SIZE)
 val_dataloader = DataLoader(val_data, shuffle=False, batch_size=BATCH_SIZE)
+test_dataloader = DataLoader(test_data, shuffle=False, batch_size=BATCH_SIZE)
 
 
 
@@ -225,7 +230,7 @@ print("\n\n")
 class SentimentLSTM(nn.Module):
   def __init__(
       self,
-      vocab_size = 120+1,
+      vocab_size = 1000+1,
       output_size= 1,
       embedding_dim= 128,
       hidden_dim= 128,
@@ -575,28 +580,30 @@ def predict_sentiment(text: str, model: torch.nn.Module):
   return y_pred.cpu().detach().numpy()
 
 
-# test on test dataset ============================
-df_test = pd.read_csv("imdb_test_dataset.csv")
-X, y = df_test['review'].values, df_test['sentiment'].values
+# test on the internal test split ============================
+print("Test-set evaluation:")
+eval_model(model, test_dataloader, loss_fn, device)
+print("\n\n")
 
-correct = 0
-total = len(y)
-for i in range(len(y)):
 
-    review = X[i]
-    sentiment = y[i]
-    sentiment_code = 1 if sentiment == "positive" else 0
+# saving model =============================================
+MODEL_PATH= Path("checkpoints")
+MODEL_PATH.mkdir(parents=True,
+                 exist_ok=True)
 
-    y_prob = predict_sentiment(review, model)
-    y_pred = torch.round(torch.from_numpy(y_prob))
+MODEL_NAME= "model_state_dict.pt"
+MODEL_SAVE_PATH= MODEL_PATH/ MODEL_NAME
 
-    if y_pred == sentiment_code:
-        correct += 1
-        print(f"Correct prediction => {correct} / {total}")
-    else:
-        print(f"Incorrect prediction")
+print(f"Saving model to: {MODEL_SAVE_PATH}")
+torch.save(obj=model.state_dict(),
+           f=MODEL_SAVE_PATH)
 
-print(f"Accuracy: {correct/total*100:.2f}%")
+VOCABULARY_SAVE_PATH = MODEL_PATH / "vocabulary.pkl"
+print(f"Saving vocabulary to: {VOCABULARY_SAVE_PATH}")
+with open(VOCABULARY_SAVE_PATH, "wb") as vocabulary_file:
+  pickle.dump(word_to_id, vocabulary_file)
+
+
 print("\n\n")
 
 
@@ -621,23 +628,6 @@ while True:
 print("\n\n")
 
 
-
-
-# saving model =============================================
-# create model dictory path
-MODEL_PATH= Path("checkpoints")
-MODEL_PATH.mkdir(parents=True,
-                 exist_ok=True)
-
-# create model save
-MODEL_NAME= "model_state_dict.pt"
-MODEL_SAVE_PATH= MODEL_PATH/ MODEL_NAME
-
-# save model state dict
-print(f"Saving model to: {MODEL_SAVE_PATH}")
-torch.save(obj=model.state_dict(),
-           f=MODEL_SAVE_PATH)
-print("\n\n")
 
 
 # loading and evaluating saved model =========================================

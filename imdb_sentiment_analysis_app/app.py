@@ -31,7 +31,7 @@ model = SentimentLSTM(
 
 model.load_state_dict(
     torch.load(
-        "model.pt",
+        "model_state_dict.pt",
         map_location=device
     )
 )
